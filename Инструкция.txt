@@ -1,38 +1,407 @@
-Установка на VDS Ubuntu (20.04/22.04/24.04)
+Ниже — **полная production-инструкция** по установке и запуску твоего Telegram Downloader Bot
+(Postgres + очередь + self-hosted Bot API + Pornhub plugin)
+на **VDS Ubuntu 24.04 / Debian 12**.
 
-1) Установить Docker + Compose plugin
-apt update
-apt install -y ca-certificates curl gnupg
+Инструкция рассчитана на “с нуля”.
+
+---
+
+# 🧭 Содержание
+
+1. Требования к серверу
+2. Подготовка системы
+3. Установка Docker
+4. Загрузка проекта
+5. Настройка Telegram (BOT_TOKEN + API_ID)
+6. Настройка `.env`
+7. Cookies (Pornhub)
+8. Первый запуск
+9. Проверка работы
+10. Автозапуск
+11. Обновление
+12. Резервное копирование
+13. Безопасность (обязательно)
+14. Решение проблем
+
+---
+
+# 1️⃣ Требования к серверу
+
+### Минимум:
+
+* 1 vCPU
+* 1 GB RAM
+* 10 GB SSD
+* Ubuntu 24.04 или Debian 12
+
+### Рекомендуется:
+
+* 2 vCPU
+* 2 GB RAM
+
+---
+
+# 2️⃣ Подготовка системы
+
+Подключаемся:
+
+```bash
+ssh root@IP_СЕРВЕРА
+```
+
+Обновляем систему:
+
+```bash
+apt update && apt upgrade -y
+```
+
+Устанавливаем базовые пакеты:
+
+```bash
+apt install -y curl git nano htop ufw
+```
+
+---
+
+# 3️⃣ Установка Docker
+
+```bash
+apt install -y ca-certificates gnupg
+
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
+
+curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg \
+| gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
-  > /etc/apt/sources.list.d/docker.list
+"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") \
+$(. /etc/os-release; echo "$VERSION_CODENAME") stable" \
+| tee /etc/apt/sources.list.d/docker.list > /dev/null
+
 apt update
+
 apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
 
-2) Развернуть в /root/dlbot
-mkdir -p /root/dlbot
-cd /root/dlbot
-# загрузить архив и распаковать
-unzip dlbot_full_release.zip
+Проверка:
 
-3) Настроить .env
-cp .env.example .env
+```bash
+docker --version
+docker compose version
+```
+
+Включаем автозапуск:
+
+```bash
+systemctl enable docker
+```
+
+---
+
+# 4️⃣ Загрузка проекта
+
+### Вариант 1 — Git:
+
+```bash
+git clone https://github.com/ТВОЙ_РЕПО/ytbot.git
+cd ytbot
+```
+
+### Вариант 2 — через SCP:
+
+На своём ПК:
+
+```bash
+scp -r ytbot root@IP:/root/
+```
+
+На сервере:
+
+```bash
+cd ytbot
+```
+
+---
+
+# 5️⃣ Настройка Telegram
+
+## 🔹 5.1 BOT_TOKEN
+
+1. Открой @BotFather
+2. `/newbot`
+3. Скопируй токен
+
+---
+
+## 🔹 5.2 ADMIN_ID
+
+Напиши @userinfobot
+Скопируй свой ID
+
+---
+
+## 🔹 5.3 TELEGRAM_API_ID и HASH
+
+Нужны для self-hosted Bot API:
+
+1. [https://my.telegram.org](https://my.telegram.org)
+2. API development tools
+3. Создай приложение
+4. Скопируй:
+
+   * API ID
+   * API Hash
+
+---
+
+# 6️⃣ Настройка `.env`
+
+```bash
 nano .env
+```
 
-  Заполни обязательно:
-    BOT_TOKEN — токен от @BotFather
-    ADMIN_ID — твой Telegram user id
-    TELEGRAM_API_ID и TELEGRAM_API_HASH — для локального Bot API (получить тут: https://core.telegram.org/api/obtaining_api_id)
+Пример полного рабочего `.env`:
 
-4) Запуск
-cd /root/dlbot
-docker compose -p dlbot up -d --build
-docker compose -p dlbot ps
+```env
+BOT_TOKEN=123456:ABCDEF
+ADMIN_ID=123456789
 
-Логи
-docker logs -f dlbot-bot-1
-docker logs -f dlbot-tg-bot-api-1
+TELEGRAM_API_ID=123456
+TELEGRAM_API_HASH=abcdef123456abcdef123456abcdef12
+
+EXTRA_SERVICES=botph_plugin
+YTDLP_COOKIEFILE=/app/cookies.txt
+
+WORKERS=4
+MAX_QUEUE_PER_USER=3
+COOLDOWN_SECONDS=5
+
+CACHE_TTL_DAYS=30
+JOBS_TTL_DAYS=7
+FAILED_TTL_DAYS=30
+
+# Optional whitelist
+# REQUIRED_CHANNEL=@yourchannel
+# REQUIRED_CHANNEL_LINK=https://t.me/yourchannel
+```
+
+Сохранить:
+CTRL+O → Enter → CTRL+X
+
+---
+
+# 7️⃣ Cookies (Pornhub, если используешь)
+
+## Получить cookies:
+
+1. Установить расширение "Get cookies.txt"
+2. Зайти на pornhub.com
+3. Экспортировать в Netscape формате
+4. Сохранить как:
+
+```
+rt.pornhub.com_cookies.txt
+```
+
+Проверка:
+
+```bash
+ls -lah
+```
+
+Docker уже монтирует файл в контейнер.
+
+---
+
+# 8️⃣ Первый запуск
+
+```bash
+docker compose up -d --build
+```
+
+Проверить контейнеры:
+
+```bash
+docker compose ps
+```
+
+Должны быть:
+
+* bot
+* postgres
+* tg-bot-api
+
+---
+
+# 9️⃣ Проверка работы
+
+Логи бота:
+
+```bash
+docker compose logs -f bot
+```
+
+Напиши боту:
+
+```
+/start
+```
+
+Отправь YouTube ссылку — должно показать выбор качества.
+
+---
+
+# 🔟 Автозапуск
+
+В docker-compose уже стоит:
+
+```
+restart: unless-stopped
+```
+
+Контейнеры будут автоматически стартовать после reboot.
+
+Проверка:
+
+```bash
+reboot
+```
+
+После перезагрузки:
+
+```bash
+docker compose ps
+```
+
+---
+
+# 11️⃣ Обновление бота
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+---
+
+# 12️⃣ Резервное копирование БД
+
+Экспорт:
+
+```bash
+docker exec -t ytbot-postgres pg_dump -U ytbot ytbot > backup.sql
+```
+
+Восстановление:
+
+```bash
+cat backup.sql | docker exec -i ytbot-postgres psql -U ytbot ytbot
+```
+
+---
+
+# 13️⃣ Безопасность (обязательно)
+
+## 🔥 Настройка Firewall
+
+```bash
+ufw allow OpenSSH
+ufw enable
+```
+
+Открывать порты не нужно — бот работает через Telegram.
+
+---
+
+## 🔐 Создать пользователя
+
+```bash
+adduser botuser
+usermod -aG docker botuser
+```
+
+---
+
+## 🚫 Отключить root login
+
+```bash
+nano /etc/ssh/sshd_config
+```
+
+Изменить:
+
+```
+PermitRootLogin no
+```
+
+Перезапуск:
+
+```bash
+systemctl restart ssh
+```
+
+---
+
+# 14️⃣ Решение проблем
+
+## ❌ Bot не стартует
+
+Проверь:
+
+```bash
+docker compose logs -f bot
+```
+
+Обычно ошибка:
+
+* неправильный BOT_TOKEN
+* неправильный TELEGRAM_API_ID / HASH
+
+---
+
+## ❌ Postgres ошибка
+
+```bash
+docker compose logs -f postgres
+```
+
+---
+
+## ❌ Видео не скачивается
+
+Проверь:
+
+* cookies актуальны
+* сервер не заблокирован
+* достаточно RAM
+
+---
+
+# 📊 Рекомендации для высокой нагрузки
+
+Если бот начинает активно использоваться:
+
+```env
+WORKERS=6
+```
+
+И сервер:
+
+* 4–8 CPU
+* 8 GB RAM
+
+---
+
+# 🎯 Готово
+
+После этого бот:
+
+* автоматически стартует
+* сохраняет очередь в Postgres
+* восстанавливает задачи после рестарта
+* поддерживает YouTube + Pornhub
+* имеет админ-панель
+
+---
+
